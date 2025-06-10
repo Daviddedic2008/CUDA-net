@@ -15,7 +15,8 @@ struct vectorCU {
 		cudaMalloc(&data, sizeof(T) * sz);
 	}
 
-	__host__ ~vectorCU() {
+	__host__ void free() {
+		// cannot have __host__ destructor to appease cuda guidelines idk
 		cudaFree(data);
 	}
 

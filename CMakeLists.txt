@@ -22,7 +22,8 @@ set_target_properties(CUDA_neural_net PROPERTIES
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
-target_link_libraries(CUDA_neural_net CUDA::cudart)
+set(CUDA_USE_STATIC_CUDA_RUNTIME ON)  # use static runtime
+target_link_libraries(CUDA_neural_net CUDA::cudart_static)
 
 target_compile_options(CUDA_neural_net PRIVATE 
     $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info --use_fast_math>

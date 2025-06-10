@@ -8,7 +8,7 @@ using namespace std;
 int main()
 {
 	//launchKernel(10, 10);
-	testVector();
+	//testVector();
 
 	cout << "Hello CMake." << endl;
 	return 0;

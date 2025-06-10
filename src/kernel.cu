@@ -1,7 +1,5 @@
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
 #include "headers/kernel.h"
-#include "headers/vectorcu.cuh"
+#include "headers/structs.cuh"
 
 #include <stdio.h>
 
@@ -21,7 +19,7 @@ extern "C" void launchKernel(const unsigned int numBlocks, const unsigned int nu
 }
 
 extern "C" void testVector() {
-	vectorCU<int> vec(1);
+	vectorCU<int> vec;
 	vec.push_back(1);
 	vec.push_back(2);
 	vec.push_back(3);
