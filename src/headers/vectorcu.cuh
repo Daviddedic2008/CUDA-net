@@ -11,7 +11,7 @@ struct vectorCU {
 	T* data;
 	unsigned int range;
 
-	__host__ vectorCU(const int sz = 20) : size(sz), range(-1) {
+	__host__ vectorCU(const int sz = 100) : size(sz), range(-1) {
 		cudaMalloc(&data, sizeof(T) * sz);
 	}
 

@@ -2,6 +2,7 @@
 #include "math_functions.h"
 #include <cmath>
 #include "vectorcu.cuh"
+#include <vector>
 
 enum class Activator {
 	sigmoid10,
@@ -57,8 +58,9 @@ struct Layer {
 	vectorCU<float> weights;
 	Activator activatorType;
 	unsigned int nextNeurons;
+	float bias;
 
-	__host__ Layer(const int numNeurons, const Activator act, const int numNextNeurons) {
+	__host__ Layer(const int numNeurons, const Activator act, const int numNextNeurons, const float bias = 0.0f) : bias(bias){
 		// should destruct/free previous mem properly
 		nextNeurons = numNeurons;
 		neurons = vectorCU<Neuron>(numNeurons);
@@ -70,23 +72,85 @@ struct Layer {
 		}
 	}
 
-	__host__ void activateLayer(const Layer& prevLayer) {
+	__host__ ~Layer() {
+		neurons.free();
+		weights.free();
+		// for some odd reason, destructors tagged with host prohibit structs from being passed into kernels :(
+		// had to free vectors here instead of giving them a proper destructor
+	}
 
+	__host__ void activateLayerImmediate(const Layer prevLayer, const int maxThreadsPerBlock) {
+		const int totalThreadCount = this->neurons.size * prevLayer.neurons.size;
+		activationKernel << <prevLayer.neurons.size, this->neurons.size, cudaStreamFireAndForget>> > (*this, prevLayer); // less boilerplate to launch
+		cudaDeviceSynchronize();
+		// maaaaybe could do with stream shenanigans without 2 separate host invocations, idk
+		plugKernel << <maxThreadsPerBlock, this->neurons.size / maxThreadsPerBlock + 1, cudaStreamFireAndForget >> > (*this);
+		cudaDeviceSynchronize();
 	}
 };
 
-__global__ void activationSubkernel(Layer layer, Layer previousLayer, const int neuronId) {
-	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
-
-	Neuron* out = layer.neurons.data; // because cuda wont let me reference a non-lvalue passed into kernel, i must do this....
-	atomicAdd(&out[neuronId].output, previousLayer.neurons[idx].output * previousLayer.weights[neuronId * idx]);
-}
-
 __global__ void activationKernel(const Layer layer, const Layer previousLayer) {
+
+	__shared__ float SHAREDADD = 0.0f;
+	// each block contains enough threads to add to one output neuron
+	__syncthreads();
+
+	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	if (idx >= layer.neurons.size * previousLayer.neurons.size) { return; } // wohoo branching
+
+	const int layerIdx = idx / previousLayer.neurons.size;
+	const int inputIdx = idx % previousLayer.neurons.size;
+
+	Neuron* out = layer.neurons.data;
+	// could tail launch child kernel, but the overhead may be too big
+	atomicAdd(&SHAREDADD, previousLayer.neurons[inputIdx].output * previousLayer.weights[layerIdx * inputIdx]);
+
+	__syncthreads(); // block-wide access to global memory, accesses to shared memory are faster
+	if (threadIdx.x == 0) {
+		// can't do without branching, as this would result in race conditons and lots of bad stuff
+		atomicAdd(&out[layerIdx].output, SHAREDADD);
+	}
+}
+
+__global__ void plugKernel(const Layer layer) {
 	const int idx = threadIdx.x + blockIdx.x * blockDim.x;
 
-	activationSubkernel << <32, 1, 0, cudaStreamTailLaunch>> > (layer, previousLayer, idx); // tmp call
-	Neuron* out = layer.neurons.data;
+	if (idx >= layer.neurons.size) { return; } // wohoo branching
 
+	Neuron* out = layer.neurons.data;
 	out[idx].activate(layer.activatorType);
+	out[idx].output += layer.bias;
 }
+
+struct Model {
+	std::vector<Layer> layers;
+	Layer inputLayer;
+	Layer outputLayer;
+
+	inline Layer& getLayer(const int idx) {
+		return idx == 0 ? inputLayer : (idx == layers.size() + 1 ? outputLayer : layers[idx]);
+	}
+
+	void evaluate(const int maxThreadsPerBlock) {
+		for (int layer = 1; layer < layers.size()+2; layer++) {
+			getLayer(layer).activateLayerImmediate(getLayer(layer - 1), maxThreadsPerBlock);
+		}
+	}
+
+	float cost(const std::vector<const float>& predictedOutput) {
+		// mean square cost function
+		float err = 0;
+		float* outputs = new float[predictedOutput.size()];
+		cudaMemcpy(outputs, this->outputLayer.neurons.data, sizeof(float) * predictedOutput.size(), cudaMemcpyDeviceToHost);
+		// copy outs over
+
+		for (int idx = 0; idx < outputLayer.neurons.size; idx++) {
+			err += (outputs[idx] - predictedOutput[idx]) * (outputs[idx] - predictedOutput[idx]);
+		}
+
+		delete outputs;
+
+		err /= predictedOutput.size();
+		return err;
+	}
+};
